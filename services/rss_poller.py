@@ -1,10 +1,11 @@
 """
 services/rss_poller.py
 ----------------------
-• Dub filtering
-• Image extraction
-• Clean post format (image on top + caption)
-• FIXED: EntityBoundsInvalid using MarkdownV2 + escaping
+• Dub filtering (Hindi/English/Russian)
+• Image support (photo + caption)
+• Clean post format like your screenshots
+• FIXED: ParseMode error using official enum
+• Better MarkdownV2 escaping
 """
 
 from __future__ import annotations
@@ -18,6 +19,9 @@ from typing import Dict, List, Optional, Tuple
 
 import aiohttp
 import feedparser
+
+# ←←← ADD THIS IMPORT (required for MarkdownV2)
+from pyrogram.enums import ParseMode
 
 from config import Config
 from database import CosmicBotz
@@ -46,7 +50,7 @@ EMOJI_MAP = {
 
 
 def _escape_md2(text: str) -> str:
-    """Escape special characters for Telegram MarkdownV2"""
+    """Escape special characters for MarkdownV2"""
     escape_chars = r'_*[]()\~`>#+-=|{}.!'
     for char in escape_chars:
         text = text.replace(char, '\\' + char)
@@ -113,7 +117,6 @@ def _extract_image(entry: Dict) -> Optional[str]:
 
 
 def _format(entry: Dict, feed_name: str, footer: str = "") -> Tuple[str, Optional[str]]:
-    """Returns (caption, image_url) — now using safe MarkdownV2"""
     title   = _escape_md2(entry.get("title", "No Title").strip())
     link    = entry.get("link", "")
     summary = _escape_md2(_clean_html(entry.get("summary", "")))
@@ -134,7 +137,6 @@ def _format(entry: Dict, feed_name: str, footer: str = "") -> Tuple[str, Optiona
     parts.append(f"📡 {_escape_md2(feed_name)}")
 
     if link:
-        # Link text is also escaped
         parts.append(f"🔗 [Read more]({link})")
 
     if footer:
@@ -243,14 +245,14 @@ class RSSPoller:
                             ch_id,
                             image_url,
                             caption=caption,
-                            parse_mode="MarkdownV2"   # ← Fixed here
+                            parse_mode=ParseMode.MARKDOWN_V2   # ← FIXED
                         )
                     else:
                         await self._client.send_message(
                             ch_id,
                             caption,
                             disable_web_page_preview=disable_preview,
-                            parse_mode="MarkdownV2"   # ← Fixed here
+                            parse_mode=ParseMode.MARKDOWN_V2   # ← FIXED
                         )
                     published = True
                 except Exception as e:
