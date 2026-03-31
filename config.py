@@ -29,7 +29,7 @@ class Config:
         self.MAX_CHANNELS: int   = int(os.getenv("MAX_CHANNELS", "10"))
 
         # ── WEBHOOK SETTINGS ────────────────────────────────────────────────
-        self.WEBHOOK: bool = os.getenv("WEBHOOK", "false").lower() == "true"
+        self.WEBHOOK: bool = os.getenv("WEBHOOK", "true").lower() == "true"
 
         # ── POST FORMATTING ─────────────────────────────────────────────────
         self.DISABLE_WEB_PREVIEW: bool = os.getenv("DISABLE_WEB_PREVIEW", "false").lower() == "true"
