@@ -1,0 +1,24 @@
+# Environment — NEVER commit secrets
+.env
+
+# Pyrogram session files
+*.session
+*.session-journal
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
