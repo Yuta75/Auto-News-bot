@@ -1,8 +1,10 @@
 """
 services/rss_poller.py
 ----------------------
-Background task that polls RSS feeds, filters dubs, extracts images,
-and sends posts in the clean format you requested.
+• Dub filtering
+• Image extraction
+• Clean post format (image on top + caption)
+• FIXED: EntityBoundsInvalid using MarkdownV2 + escaping
 """
 
 from __future__ import annotations
@@ -41,6 +43,14 @@ EMOJI_MAP = {
     "movie":   "🎬",
     "news":    "📰",
 }
+
+
+def _escape_md2(text: str) -> str:
+    """Escape special characters for Telegram MarkdownV2"""
+    escape_chars = r'_*[]()\~`>#+-=|{}.!'
+    for char in escape_chars:
+        text = text.replace(char, '\\' + char)
+    return text
 
 
 def _pick_emoji(tags: List[str], title: str) -> str:
@@ -103,28 +113,32 @@ def _extract_image(entry: Dict) -> Optional[str]:
 
 
 def _format(entry: Dict, feed_name: str, footer: str = "") -> Tuple[str, Optional[str]]:
-    title   = entry.get("title", "No Title").strip()
+    """Returns (caption, image_url) — now using safe MarkdownV2"""
+    title   = _escape_md2(entry.get("title", "No Title").strip())
     link    = entry.get("link", "")
-    summary = _clean_html(entry.get("summary", ""))
+    summary = _escape_md2(_clean_html(entry.get("summary", "")))
     tags    = [t.get("term", "") for t in entry.get("tags", [])]
     emoji   = _pick_emoji(tags, title)
     date    = _fmt_date(entry.get("published_parsed"))
     image   = _extract_image(entry)
 
-    parts = [
-        f"{emoji} **{title}**",
-        "",
-    ]
+    parts = [f"{emoji} **{title}**", ""]
+
     if summary:
-        parts.append(f"{summary}")
+        parts.append(summary)
         parts.append("")
+
     if date:
         parts.append(f"🕐 {date}")
-    parts.append(f"📡 {feed_name}")
+
+    parts.append(f"📡 {_escape_md2(feed_name)}")
+
     if link:
+        # Link text is also escaped
         parts.append(f"🔗 [Read more]({link})")
+
     if footer:
-        parts.append(f"\n{footer}")
+        parts.append(f"\n{_escape_md2(footer)}")
 
     caption = "\n".join(parts)
     return caption, image
@@ -229,14 +243,14 @@ class RSSPoller:
                             ch_id,
                             image_url,
                             caption=caption,
-                            parse_mode="Markdown"
+                            parse_mode="MarkdownV2"   # ← Fixed here
                         )
                     else:
                         await self._client.send_message(
                             ch_id,
                             caption,
                             disable_web_page_preview=disable_preview,
-                            parse_mode="Markdown"
+                            parse_mode="MarkdownV2"   # ← Fixed here
                         )
                     published = True
                 except Exception as e:
