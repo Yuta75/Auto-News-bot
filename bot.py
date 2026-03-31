@@ -1,19 +1,13 @@
 """
-Anime News Bot — Production Edition
-Render / Koyeb / Heroku / VPS ready.
-
-Startup sequence:
-  1. Load env vars (auto-reads .env if present)
-  2. Init MongoDB + indexes
-  3. Seed default feeds if DB is empty
-  4. Sync persisted DB settings back into Config
-  5. Start PyroFork client with auto-discovered handlers
-  6. Launch background RSSPoller task
-  7. Health-check HTTP server (if WEBHOOK=true)
+bot.py (Main Entry Point)
+-------------------------
+Starts the Telegram bot, connects to MongoDB, and launches the RSS Poller.
+Webhook host is hardcoded and port is taken directly from $PORT env var.
 """
 
 import asyncio
 import logging
+import os
 
 try:
     from dotenv import load_dotenv
@@ -35,30 +29,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ── Health-check server ───────────────────────────────────────────────────────
-
 async def _health(request: web.Request) -> web.Response:
     return web.Response(text="OK")
 
 
-async def _start_webhook(host: str, port: int) -> web.AppRunner:
+async def _start_webhook(port: int) -> web.AppRunner:
+    """Webhook server with hardcoded host 0.0.0.0"""
     app = web.Application()
     app.router.add_get("/", _health)
     app.router.add_get("/health", _health)
     runner = web.AppRunner(app)
     await runner.setup()
-    await web.TCPSite(runner, host, port).start()
-    logger.info(f"🌐 Health-check server running on {host}:{port}")
+    await web.TCPSite(runner, "0.0.0.0", port).start()
+    logger.info(f"🌐 Health-check webhook server running on 0.0.0.0:{port}")
     return runner
 
 
-# ── DB → Config sync ─────────────────────────────────────────────────────────
-
 async def _sync_settings(db: CosmicBotz, cfg: Config):
-    """
-    Reload persisted settings from MongoDB into the live Config object.
-    Ensures /set_* changes survive bot restarts.
-    """
     s = await db.get_settings()
     cfg.POLL_INTERVAL       = s.get("poll_interval", cfg.POLL_INTERVAL)
     cfg.MAX_RSS             = s.get("max_rss", cfg.MAX_RSS)
@@ -69,14 +56,8 @@ async def _sync_settings(db: CosmicBotz, cfg: Config):
     for uid in s.get("extra_admins", []):
         cfg.add_admin(uid)
 
-    logger.info(
-        f"⚙️  Settings synced — interval={cfg.POLL_INTERVAL}s "
-        f"max_rss={cfg.MAX_RSS} max_channels={cfg.MAX_CHANNELS} "
-        f"admins={cfg.ADMINS}"
-    )
+    logger.info(f"⚙️ Settings synced | Interval: {cfg.POLL_INTERVAL}s")
 
-
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 async def main():
     cfg = Config()
@@ -87,32 +68,34 @@ async def main():
     await _sync_settings(db, cfg)
 
     app = Client(
-        name="AnimeNewsBot",
+        name="AnimeDubBot",
         bot_token=cfg.BOT_TOKEN,
         api_id=cfg.API_ID,
         api_hash=cfg.API_HASH,
         plugins={"root": "handlers"},
     )
-    app.db  = db
+
+    app.db = db
     app.cfg = cfg
 
     poller = RSSPoller(app, db, cfg)
-    # Attach poller to client so /force_poll can reuse it
     app.poller = poller
 
     await app.start()
-    logger.info(f"✅ Bot started. Owner: {cfg.ADMINS[0]} | Admins: {cfg.ADMINS}")
+    logger.info(f"✅ Bot started successfully! Owner: {cfg.ADMINS[0]}")
 
     poller.start()
 
     if cfg.WEBHOOK:
-        logger.info("🚀 WEBHOOK mode")
-        runner = await _start_webhook(cfg.WEBHOOK_HOST, cfg.WEBHOOK_PORT)
+        # PORT is taken directly from environment variable (Render.com standard)
+        port = int(os.getenv("PORT"))
+        logger.info("🚀 Starting in WEBHOOK mode")
+        runner = await _start_webhook(port)
         await idle()
         poller.stop()
         await runner.cleanup()
     else:
-        logger.info("🚀 POLLING mode")
+        logger.info("🚀 Starting in POLLING mode")
         await idle()
         poller.stop()
 
