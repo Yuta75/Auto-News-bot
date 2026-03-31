@@ -29,7 +29,7 @@ from database import CosmicBotz
 logger = logging.getLogger(__name__)
 
 # ========================== DUB FILTER ==========================
-ALLOWED_DUBS = ["Hindi", "English", "Russian"]
+ALLOWED_DUBS = ["Hindi", "English", "Japanese"]
 
 DUB_PATTERN = re.compile(
     r'\(\s*(' + '|'.join(ALLOWED_DUBS) + r')\s*Dub\s*\)',
