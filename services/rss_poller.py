@@ -1,15 +1,15 @@
 """
 RSSPoller — background asyncio task.
 
-Polls all ACTIVE registered feeds every POLL_INTERVAL seconds,
-deduplicates via CosmicBotz.seen, formats and sends to all channels.
+Polls all ACTIVE feeds every POLL_INTERVAL seconds, deduplicates via
+CosmicBotz.seen, formats and publishes to all registered channels.
 
-Production improvements:
- - Reads poll_interval from DB settings (live config changes apply on next cycle)
- - Per-feed consecutive error tracking with backoff logging
- - Rate-limit aware: 0.5s delay between channel sends
- - Graceful shutdown via stop() method
- - Reads post_footer and disable_web_preview from live DB settings
+Key behaviours:
+ - start() / stop() properly manage the asyncio Task
+ - Poll interval is re-read from DB each cycle (live /set_interval takes effect)
+ - post_footer and disable_web_preview are read from DB each cycle
+ - Per-feed consecutive error counter with backoff logging (not spammy)
+ - 0.5s delay between channel sends to respect Telegram rate limits
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ from database import CosmicBotz
 
 logger = logging.getLogger(__name__)
 
-# ── Category emoji map ────────────────────────────────────────────────────────
 EMOJI_MAP = {
     "anime":   "🎌",
     "manga":   "📖",
@@ -96,48 +95,47 @@ def _format(entry: Dict, feed_name: str, footer: str = "") -> str:
     return "\n".join(parts)
 
 
-# ── Poller ────────────────────────────────────────────────────────────────────
-
 class RSSPoller:
     def __init__(self, client, db: CosmicBotz, cfg: Config):
-        self._client  = client
-        self._db      = db
-        self._cfg     = cfg
-        self._running = False
+        self._client = client
+        self._db     = db
+        self._cfg    = cfg
         self._task: Optional[asyncio.Task] = None
-        # Track consecutive errors per feed URL for backoff logging
-        self._feed_errors: Dict[str, int] = {}
+        self._feed_errors: Dict[str, int]  = {}
 
-    async def run(self):
-        self._running = True
-        # Read live interval from DB
-        interval = await self._db.get_setting("poll_interval", self._cfg.POLL_INTERVAL)
-        logger.info(f"📡 RSS Poller started — interval {interval}s")
-        while self._running:
-            try:
-                await self._poll_all()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Poller loop error: {e}", exc_info=True)
-            # Reload interval each cycle so live changes take effect
-            interval = await self._db.get_setting("poll_interval", self._cfg.POLL_INTERVAL)
-            await asyncio.sleep(interval)
+    def start(self):
+        """Schedule the poller loop as a background asyncio Task."""
+        self._task = asyncio.create_task(self._run())
 
     def stop(self):
-        self._running = False
+        """Cancel the background Task cleanly."""
         if self._task and not self._task.done():
             self._task.cancel()
 
-    async def _poll_all(self):
+    async def _run(self):
+        interval = await self._db.get_setting("poll_interval", self._cfg.POLL_INTERVAL)
+        logger.info(f"📡 RSS Poller started — interval {interval}s")
+        while True:
+            try:
+                await self.poll_once()
+            except asyncio.CancelledError:
+                logger.info("📡 RSS Poller stopped.")
+                break
+            except Exception as e:
+                logger.error(f"Poller loop error: {e}", exc_info=True)
+            # Re-read interval so /set_interval takes effect without restart
+            interval = await self._db.get_setting("poll_interval", self._cfg.POLL_INTERVAL)
+            await asyncio.sleep(interval)
+
+    async def poll_once(self):
+        """Run a single full poll cycle. Called by both _run() and /force_poll."""
         feeds    = await self._db.get_active_rss()
         channels = await self._db.get_all_channels()
 
         if not feeds or not channels:
             return
 
-        channel_ids = [c["channel_id"] for c in channels]
-        # Load live settings
+        channel_ids     = [c["channel_id"] for c in channels]
         disable_preview = await self._db.get_setting("disable_web_preview", False)
         footer          = await self._db.get_setting("post_footer", "")
 
@@ -170,8 +168,7 @@ class RSSPoller:
             self._log_feed_error(url, str(e))
             return
 
-        parsed  = feedparser.parse(content)
-        entries = parsed.get("entries", [])
+        entries = feedparser.parse(content).get("entries", [])
         new     = 0
 
         for entry in reversed(entries):  # oldest first
@@ -185,8 +182,7 @@ class RSSPoller:
             for ch_id in channel_ids:
                 try:
                     await self._client.send_message(
-                        ch_id,
-                        text,
+                        ch_id, text,
                         disable_web_page_preview=disable_preview,
                     )
                     published = True
@@ -196,7 +192,7 @@ class RSSPoller:
             await self._db.mark_seen(guid)
             if published:
                 new += 1
-            await asyncio.sleep(0.5)  # respect Telegram rate limits
+            await asyncio.sleep(0.5)
 
         if new:
             await self._db.increment_published(new)
@@ -205,6 +201,5 @@ class RSSPoller:
     def _log_feed_error(self, url: str, reason: str):
         count = self._feed_errors.get(url, 0) + 1
         self._feed_errors[url] = count
-        # Only log every 1st, 3rd, 10th, then every 10
         if count in (1, 3, 10) or count % 10 == 0:
             logger.warning(f"Feed error [{url}] (×{count}): {reason}")
